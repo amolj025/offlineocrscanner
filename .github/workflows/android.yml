@@ -1,60 +1,241 @@
-name: OCR Vision Pro APK
+name: OCR Vision Pro Android Build
+
 on:
-  workflow_dispatch:
   push:
-    branches: [main, master]
+    branches:
+      - main
+      - master
+
+  workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    name: Build OCR Vision Pro APK
+
+    runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-java@v5
+
+      # --------------------------------------------------
+      # STEP 1: Checkout GitHub repository
+      # --------------------------------------------------
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # --------------------------------------------------
+      # STEP 2: Setup Java 17
+      # --------------------------------------------------
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v4
-      - name: Extract uploaded ZIP
+
+
+      # --------------------------------------------------
+      # STEP 3: Setup Android SDK
+      # --------------------------------------------------
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+
+      # --------------------------------------------------
+      # STEP 4: Install Android SDK components
+      # --------------------------------------------------
+
+      - name: Install Android SDK components
         run: |
-          if [ -f OfflineOCRScanner-Android-Project.zip ]; then
-            unzip -o OfflineOCRScanner-Android-Project.zip -d .
-          fi
-      - name: Locate project
-        id: project
+          sdkmanager --install "platforms;android-35"
+          sdkmanager --install "build-tools;35.0.0"
+
+
+      # --------------------------------------------------
+      # STEP 5: Find and extract project ZIP
+      # --------------------------------------------------
+
+      - name: Extract Android project
         shell: bash
         run: |
-          F=$(find . -name settings.gradle -not -path './.git/*' -not -path '*/build/*' -print -quit)
-          if [ -z "$F" ]; then echo "settings.gradle not found"; find . -maxdepth 3 -type f; exit 1; fi
-          D=$(dirname "$F")
-          echo "dir=$D" >> "$GITHUB_OUTPUT"
-          test -f "$D/app/build.gradle"
-      - uses: gradle/actions/setup-gradle@v6
+          set -e
+
+          echo "Searching for ZIP file..."
+
+          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP file found in repository root."
+            exit 1
+          fi
+
+          echo "ZIP file found: $ZIP_FILE"
+
+          mkdir -p extracted
+
+          echo "Extracting project..."
+
+          unzip -q "$ZIP_FILE" -d extracted
+
+          echo "Extraction completed."
+
+          echo "Searching for settings.gradle..."
+
+          SETTINGS_FILE=$(find extracted -type f -name "settings.gradle" | head -n 1)
+
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "ERROR: settings.gradle not found."
+
+            echo "Extracted files:"
+            find extracted -maxdepth 5 -type f
+
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+
+          echo "Android project directory:"
+          echo "$PROJECT_DIR"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+
+      # --------------------------------------------------
+      # STEP 6: Verify project structure
+      # --------------------------------------------------
+
+      - name: Verify Android project
+        shell: bash
+        run: |
+          set -e
+
+          echo "Project directory: $PROJECT_DIR"
+
+          if [ ! -f "$PROJECT_DIR/settings.gradle" ]; then
+            echo "ERROR: settings.gradle missing."
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT_DIR/build.gradle" ]; then
+            echo "ERROR: Root build.gradle missing."
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
+            echo "ERROR: app/build.gradle missing."
+            exit 1
+          fi
+
+          echo "Project structure verified."
+
+
+      # --------------------------------------------------
+      # STEP 7: Download Tesseract English OCR model
+      # --------------------------------------------------
+
+      - name: Download OCR language model
+        shell: bash
+        run: |
+          set -e
+
+          TESSDATA_DIR="$PROJECT_DIR/app/src/main/assets/tessdata"
+
+          mkdir -p "$TESSDATA_DIR"
+
+          echo "Downloading English OCR model..."
+
+          curl -L --fail --retry 3 \
+            https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata \
+            -o "$TESSDATA_DIR/eng.traineddata"
+
+          if [ ! -s "$TESSDATA_DIR/eng.traineddata" ]; then
+            echo "ERROR: OCR model download failed."
+            exit 1
+          fi
+
+          echo "OCR model downloaded successfully."
+
+          ls -lh "$TESSDATA_DIR/eng.traineddata"
+
+
+      # --------------------------------------------------
+      # STEP 8: Setup Gradle 8.9
+      # --------------------------------------------------
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.9'
-          cache-provider: basic
-      - name: Download offline English OCR model
-        working-directory: ${{ steps.project.outputs.dir }}
+
+
+      # --------------------------------------------------
+      # STEP 9: Check Gradle version
+      # --------------------------------------------------
+
+      - name: Check Gradle
         run: |
-          mkdir -p app/src/main/assets/tessdata
-          curl -L --fail --retry 3 https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata -o app/src/main/assets/tessdata/eng.traineddata
-          test -s app/src/main/assets/tessdata/eng.traineddata
-      - name: Install Android SDK
-        run: |
-          sdkmanager "platforms;android-35"
-          sdkmanager "build-tools;35.0.0"
+          java -version
+          gradle --version
+
+
+      # --------------------------------------------------
+      # STEP 10: Run Android unit tests
+      # --------------------------------------------------
+
       - name: Run unit tests
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: gradle --no-daemon testDebugUnitTest --stacktrace
-      - name: Build APK
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: gradle --no-daemon assembleDebug --stacktrace
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          gradle testDebugUnitTest --no-daemon
+
+
+      # --------------------------------------------------
+      # STEP 11: Build Debug APK
+      # --------------------------------------------------
+
+      - name: Build Debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          gradle assembleDebug --no-daemon
+
+
+      # --------------------------------------------------
+      # STEP 12: Verify APK
+      # --------------------------------------------------
+
       - name: Verify APK
-        working-directory: ${{ steps.project.outputs.dir }}
-        run: test -s app/build/outputs/apk/debug/app-debug.apk
-      - uses: actions/upload-artifact@v4
+        shell: bash
+        run: |
+          set -e
+
+          APK_PATH="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK_PATH" ]; then
+            echo "ERROR: APK file not generated."
+            echo "Searching build directory..."
+
+            find "$PROJECT_DIR/app/build/outputs" -type f || true
+
+            exit 1
+          fi
+
+          echo "APK generated successfully."
+
+          ls -lh "$APK_PATH"
+
+
+      # --------------------------------------------------
+      # STEP 13: Upload APK to GitHub Actions
+      # --------------------------------------------------
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
           name: OCR-Vision-Pro-debug-apk
-          path: ${{ steps.project.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
