@@ -14,7 +14,7 @@ permissions:
 jobs:
   build:
     name: Build and Test APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout source code
@@ -27,7 +27,7 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
