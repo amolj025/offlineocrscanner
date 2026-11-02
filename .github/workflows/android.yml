@@ -15,8 +15,6 @@ build:
 name: Build and Test APK
 runs-on: ubuntu-24.04
 
-```
-steps:
 
   # 1. Checkout repository
   - name: Checkout source code
